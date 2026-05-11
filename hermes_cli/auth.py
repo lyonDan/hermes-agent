@@ -4374,6 +4374,7 @@ def _prompt_model_selection(
     _RESET = "\033[0m"
 
     # Try arrow-key menu first, fall back to number input
+    _numbered_list_printed = False
     try:
         from simple_term_menu import TerminalMenu
 
@@ -4381,14 +4382,31 @@ def _prompt_model_selection(
         choices.append("  Enter custom model name")
         choices.append("  Skip (keep current)")
 
+        # Build numbered shortcuts so users can type a digit even when
+        # arrow keys don't work (known issue in some terminal/tmux setups).
+        shortcuts = [str(i) for i in range(1, len(choices) + 1)]
+
+        # Print numbered reference list BEFORE the menu so the user can
+        # fall back to typing a number if arrow keys are unresponsive.
+        num_width = len(str(len(ordered) + 2))
+        print(menu_title)
+        print()
+        for i, mid in enumerate(ordered, 1):
+            print(f"  {i:>{num_width}}. {_label(mid)}")
+        n = len(ordered)
+        print(f"  {n + 1:>{num_width}}. Enter custom model name")
+        print(f"  {n + 2:>{num_width}}. Skip (keep current)")
+        print()
+        print(f"  Use arrow keys or type a number [{1}-{n + 2}] then Enter:")
+        print()
+        _numbered_list_printed = True
+
         # Print the unavailable block BEFORE the menu via regular print().
         # simple_term_menu pads title lines to terminal width (causes wrapping),
         # so we keep the title minimal and use stdout for the static block.
         # clear_screen=False means our printed output stays visible above.
         _upgrade_url = (portal_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
         if _unavailable:
-            print(menu_title)
-            print()
             for mid in _unavailable:
                 print(f"{_DIM}     {_label(mid)}{_RESET}")
             print()
@@ -4396,7 +4414,7 @@ def _prompt_model_selection(
             print()
             effective_title = "Available free models:"
         else:
-            effective_title = menu_title
+            effective_title = "Select (or type a number):"
 
         menu = TerminalMenu(
             choices,
@@ -4407,39 +4425,55 @@ def _prompt_model_selection(
             cycle_cursor=True,
             clear_screen=False,
             title=effective_title,
+            show_shortcut_hints=False,
         )
-        idx = menu.show()
+        try:
+            idx = menu.show()
+        except (KeyboardInterrupt, EOFError):
+            idx = None
         from hermes_cli.curses_ui import flush_stdin
         flush_stdin()
         if idx is None:
+            # User cancelled via ESC / Ctrl-C / arrow keys unresponsive —
+            # re-print the numbered list (TerminalMenu may have obscured it)
+            # and fall through to numbered input.
+            print()
+            print(f"  Switching to number input.  Your choices:")
+            print()
+            for i, mid in enumerate(ordered, 1):
+                print(f"  {i:>{num_width}}. {_label(mid)}")
+            n = len(ordered)
+            print(f"  {n + 1:>{num_width}}. Enter custom model name")
+            print(f"  {n + 2:>{num_width}}. Skip (keep current)")
+            print()
+        else:
+            print()
+            if idx < len(ordered):
+                return ordered[idx]
+            elif idx == len(ordered):
+                custom = input("Enter model name: ").strip()
+                return custom if custom else None
             return None
-        print()
-        if idx < len(ordered):
-            return ordered[idx]
-        elif idx == len(ordered):
-            custom = input("Enter model name: ").strip()
-            return custom if custom else None
-        return None
     except (ImportError, NotImplementedError, OSError, subprocess.SubprocessError):
         pass
 
-    # Fallback: numbered list
-    print(menu_title)
-    num_width = len(str(len(ordered) + 2))
-    for i, mid in enumerate(ordered, 1):
-        print(f"  {i:>{num_width}}. {_label(mid)}")
-    n = len(ordered)
-    print(f"  {n + 1:>{num_width}}. Enter custom model name")
-    print(f"  {n + 2:>{num_width}}. Skip (keep current)")
-
-    if _unavailable:
-        _upgrade_url = (portal_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
+    # Fallback: numbered list (also reached when arrow-key menu is unusable)
+    if not _numbered_list_printed:
+        print(menu_title)
+        num_width = len(str(len(ordered) + 2))
+        for i, mid in enumerate(ordered, 1):
+            print(f"  {i:>{num_width}}. {_label(mid)}")
+        n = len(ordered)
+        print(f"  {n + 1:>{num_width}}. Enter custom model name")
+        print(f"  {n + 2:>{num_width}}. Skip (keep current)")
+        if _unavailable:
+            _upgrade_url = (portal_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
+            print()
+            print(f"  {_DIM}── Unavailable models (requires paid tier — upgrade at {_upgrade_url}) ──{_RESET}")
+            for mid in _unavailable:
+                print(f"  {'':>{num_width}}  {_DIM}{_label(mid)}{_RESET}")
         print()
-        print(f"  {_DIM}── Unavailable models (requires paid tier — upgrade at {_upgrade_url}) ──{_RESET}")
-        for mid in _unavailable:
-            print(f"  {'':>{num_width}}  {_DIM}{_label(mid)}{_RESET}")
     print()
-
     while True:
         try:
             choice = input(f"Choice [1-{n + 2}] (default: skip): ").strip()
